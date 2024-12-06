@@ -549,6 +549,10 @@ impl ChainQuery {
 
         let rows = iter
             .map(|row| (row.get_txid(), row.key.txinfo, row.key.tx_position))
+            // We should make sure that each history entry should be unique
+            // We check uniqueness against equality of these 3 things:
+            // ("current txid", "the position in the inputs or outputs", "whether it's an input or output")
+            .unique_by(|(txid, info, _)| (*txid, info.get_vin_or_vout(), info.has_vin()))
             .skip_while(|(txid, _, _)| {
                 // skip until we reach the last_seen_txid
                 last_seen_txid.map_or(false, |last_seen_txid| last_seen_txid != txid)
@@ -563,7 +567,7 @@ impl ChainQuery {
             });
         let mut map: HashMap<Txid, TxHistorySummary> = HashMap::new();
         for (txid, info, height, time, tx_position) in rows {
-            if !map.contains_key(&txid) && map.len() == limit {
+            if !map.contains_key(&txid) && map.len() >= limit {
                 break;
             }
             match info {
@@ -1732,6 +1736,31 @@ impl TxHistoryInfo {
             | TxHistoryInfo::Pegout(peg::PegoutInfo { txid, .. }) => deserialize(txid),
         }
         .expect("cannot parse Txid")
+    }
+
+    pub fn get_vin_or_vout(&self) -> u32 {
+        match self {
+            TxHistoryInfo::Funding(FundingInfo { vout: val, .. })
+            | TxHistoryInfo::Spending(SpendingInfo { vin: val, .. }) => *val,
+
+            #[cfg(feature = "liquid")]
+            TxHistoryInfo::Issuing(asset::IssuingInfo { vin: val, .. })
+            | TxHistoryInfo::Burning(asset::BurningInfo { vout: val, .. })
+            | TxHistoryInfo::Pegin(peg::PeginInfo { vin: val, .. })
+            | TxHistoryInfo::Pegout(peg::PegoutInfo { vout: val, .. }) => *val,
+        }
+    }
+
+    pub fn has_vin(&self) -> bool {
+        match self {
+            TxHistoryInfo::Funding(_) => false,
+            TxHistoryInfo::Spending(_) => true,
+
+            #[cfg(feature = "liquid")]
+            TxHistoryInfo::Issuing(_) | TxHistoryInfo::Pegin(_) => true,
+            #[cfg(feature = "liquid")]
+            TxHistoryInfo::Burning(_) | TxHistoryInfo::Pegout(_) => false,
+        }
     }
 }
 
