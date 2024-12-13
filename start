@@ -52,7 +52,6 @@ case "${1}" in
 	;;
 	testnet4)
 		NETWORK=testnet4
-		MAGIC=283f161c
 		THREADS=$((NPROC / 6))
 		CRONJOB_TIMING="17 4 * * *"
 	;;
@@ -203,7 +202,6 @@ do
 		--precache-threads "${THREADS}" \
 		--cookie "${RPC_USER}:${RPC_PASS}" \
 		--cors '*' \
-		--magic "${MAGIC}" \
 		--address-search \
 		--utxos-limit "${UTXOS_LIMIT}" \
 		--electrum-txs-limit "${ELECTRUM_TXS_LIMIT}" \
