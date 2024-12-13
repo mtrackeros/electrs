@@ -114,9 +114,7 @@ generate_popular_scripts() {
 
 # This function is for inserting the cronjob for generating the popular scripts
 CRONJOB_CMD="\"${HOME}/electrs/start\" \"${NETWORK}\" popular-scripts"
-insert_cronjob() {
-	(crontab -l 2>/dev/null; echo "${CRONJOB_TIMING} ${CRONJOB_CMD}") | crontab -
-}
+echo "${CRONJOB_TIMING} ${CRONJOB_CMD}"
 
 case "${2}" in
 	popular-scripts)
@@ -178,12 +176,8 @@ do
 		ELECTRUM_TXS_LIMIT=9000
 	fi
 
-#	if [ ! -e "${POPULAR_SCRIPTS_FILE}" ];then
-#		generate_popular_scripts
-#	fi
-
-	if [ ! (crontab -l | grep "${CRONJOB_CMD}") ];then
-		insert_cronjob
+	if [ ! -e "${POPULAR_SCRIPTS_FILE}" ];then
+		generate_popular_scripts
 	fi
 
 	# Run the electrs process (Note: db-dir is used in both commands)
