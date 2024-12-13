@@ -122,6 +122,12 @@ case "${2}" in
 		generate_popular_scripts
 		exit 0
 	;;
+	version)
+		echo "[*] Only print versions, then exit"
+		cargo run --bin electrs --release -- --version
+		cargo run --bin popular-scripts --release -- --version
+		exit 0
+	;;
 	"")
 		# If the 2nd arg isn't passed, just run the normal electrs script as-is
 	;;
