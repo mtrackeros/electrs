@@ -175,9 +175,9 @@ do
 		ELECTRUM_TXS_LIMIT=9000
 	fi
 
-	if [ ! -e "${POPULAR_SCRIPTS_FILE}" ];then
-		generate_popular_scripts
-	fi
+#	if [ ! -e "${POPULAR_SCRIPTS_FILE}" ];then
+#		generate_popular_scripts
+#	fi
 
 	if [ ! (crontab -l | grep "${CRONJOB_CMD}") ];then
 		insert_cronjob
