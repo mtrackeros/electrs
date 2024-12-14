@@ -209,6 +209,13 @@ pub struct ChainQuery {
     network: Network,
 }
 
+#[derive(Debug, Clone)]
+pub enum Operation {
+    AddBlocks,
+    DeleteBlocks,
+    DeleteBlocksWithHistory(crossbeam_channel::Sender<[u8; 32]>),
+}
+
 // TODO: &[Block] should be an iterator / a queue.
 impl Indexer {
     pub fn open(store: Arc<Store>, from: FetchFrom, config: &Config, metrics: &Metrics) -> Self {
@@ -273,13 +280,53 @@ impl Indexer {
         let tip = daemon.getbestblockhash()?;
         let new_headers = self.get_new_headers(&daemon, &tip)?;
 
+        // Must rollback blocks before rolling forward
+        let headers_len = {
+            let mut headers = self.store.indexed_headers.write().unwrap();
+            let reorged = headers.apply(new_headers.clone());
+            assert_eq!(tip, *headers.tip());
+            let headers_len = headers.len();
+            drop(headers);
+
+            if !reorged.is_empty() {
+                if reorged.len() > 10 {
+                    warn!("reorg of over 10 blocks detected! Wonky stuff might happen!");
+                }
+                let (tx, rx) = crossbeam_channel::unbounded();
+                // Delete txstore
+                start_fetcher(self.from, &daemon, reorged.clone())?
+                    .map(|blocks| self.add(&blocks, Operation::DeleteBlocks));
+                // Delete history_db
+                start_fetcher(self.from, &daemon, reorged)?.map(|blocks| {
+                    self.index(&blocks, Operation::DeleteBlocksWithHistory(tx.clone()))
+                });
+                // Needed to clone in order to pass into the closure otherwise
+                drop(tx);
+
+                // All senders are dropped by now, so the receiver will iterate until the
+                // end of the unbounded queue.
+                let scripts = rx.into_iter().collect::<HashSet<_>>();
+                for script in scripts {
+                    // cancel the script cache DB for these scripts. They might get incorrect data mixed in.
+                    self.store.cache_db.delete(vec![
+                        StatsCacheRow::key(&script),
+                        UtxoCacheRow::key(&script),
+                        #[cfg(feature = "liquid")]
+                        [b"z", &script[..]].concat(), // asset cache key
+                    ]);
+                }
+            }
+            headers_len
+        };
+
         let to_add = self.headers_to_add(&new_headers);
         debug!(
             "adding transactions from {} blocks using {:?}",
             to_add.len(),
             self.from
         );
-        start_fetcher(self.from, &daemon, to_add)?.map(|blocks| self.add(&blocks));
+        start_fetcher(self.from, &daemon, to_add)?
+            .map(|blocks| self.add(&blocks, Operation::AddBlocks));
         self.start_auto_compactions(&self.store.txstore_db);
 
         let to_index = self.headers_to_index(&new_headers);
@@ -288,7 +335,8 @@ impl Indexer {
             to_index.len(),
             self.from
         );
-        start_fetcher(self.from, &daemon, to_index)?.map(|blocks| self.index(&blocks));
+        start_fetcher(self.from, &daemon, to_index)?
+            .map(|blocks| self.index(&blocks, Operation::AddBlocks));
         self.start_auto_compactions(&self.store.history_db);
 
         if let DBFlush::Disable = self.flush {
@@ -302,20 +350,16 @@ impl Indexer {
         debug!("updating synced tip to {:?}", tip);
         self.store.txstore_db.put_sync(b"t", &serialize(&tip));
 
-        let mut headers = self.store.indexed_headers.write().unwrap();
-        headers.apply(new_headers);
-        assert_eq!(tip, *headers.tip());
-
         if let FetchFrom::BlkFiles = self.from {
             self.from = FetchFrom::Bitcoind;
         }
 
-        self.tip_metric.set(headers.len() as i64 - 1);
+        self.tip_metric.set(headers_len as i64 - 1);
 
         Ok(tip)
     }
 
-    fn add(&self, blocks: &[BlockEntry]) {
+    fn add(&self, blocks: &[BlockEntry], op: Operation) {
         debug!("Adding {} blocks to Indexer", blocks.len());
         // TODO: skip orphaned blocks?
         let rows = {
@@ -324,22 +368,35 @@ impl Indexer {
         };
         {
             let _timer = self.start_timer("add_write");
-            self.store.txstore_db.write(rows, self.flush);
+            if let Operation::AddBlocks = op {
+                self.store.txstore_db.write(rows, self.flush);
+            } else {
+                self.store
+                    .txstore_db
+                    .delete(rows.into_iter().map(|r| r.key).collect());
+            }
         }
 
-        self.store
-            .added_blockhashes
-            .write()
-            .unwrap()
-            .extend(blocks.iter().map(|b| {
-                if b.entry.height() % 10_000 == 0 {
-                    info!("Tx indexing is up to height={}", b.entry.height());
-                }
-                b.entry.hash()
-            }));
+        if let Operation::AddBlocks = op {
+            self.store
+                .added_blockhashes
+                .write()
+                .unwrap()
+                .extend(blocks.iter().map(|b| {
+                    if b.entry.height() % 10_000 == 0 {
+                        info!("Tx indexing is up to height={}", b.entry.height());
+                    }
+                    b.entry.hash()
+                }));
+        } else {
+            let mut added_blockhashes = self.store.added_blockhashes.write().unwrap();
+            for b in blocks {
+                added_blockhashes.remove(b.entry.hash());
+            }
+        }
     }
 
-    fn index(&self, blocks: &[BlockEntry]) {
+    fn index(&self, blocks: &[BlockEntry], op: Operation) {
         debug!("Indexing {} blocks with Indexer", blocks.len());
         let previous_txos_map = {
             let _timer = self.start_timer("index_lookup");
@@ -347,20 +404,28 @@ impl Indexer {
         };
         let rows = {
             let _timer = self.start_timer("index_process");
-            let added_blockhashes = self.store.added_blockhashes.read().unwrap();
-            for b in blocks {
-                if b.entry.height() % 10_000 == 0 {
-                    info!("History indexing is up to height={}", b.entry.height());
-                }
-                let blockhash = b.entry.hash();
-                // TODO: replace by lookup into txstore_db?
-                if !added_blockhashes.contains(blockhash) {
-                    panic!("cannot index block {} (missing from store)", blockhash);
+            if let Operation::AddBlocks = op {
+                let added_blockhashes = self.store.added_blockhashes.read().unwrap();
+                for b in blocks {
+                    if b.entry.height() % 10_000 == 0 {
+                        info!("History indexing is up to height={}", b.entry.height());
+                    }
+                    let blockhash = b.entry.hash();
+                    // TODO: replace by lookup into txstore_db?
+                    if !added_blockhashes.contains(blockhash) {
+                        panic!("cannot index block {} (missing from store)", blockhash);
+                    }
                 }
             }
-            index_blocks(blocks, &previous_txos_map, &self.iconfig)
+            index_blocks(blocks, &previous_txos_map, &self.iconfig, &op)
         };
-        self.store.history_db.write(rows, self.flush);
+        if let Operation::AddBlocks = op {
+            self.store.history_db.write(rows, self.flush);
+        } else {
+            self.store
+                .history_db
+                .delete(rows.into_iter().map(|r| r.key).collect());
+        }
     }
 }
 
@@ -1370,6 +1435,7 @@ fn index_blocks(
     block_entries: &[BlockEntry],
     previous_txos_map: &HashMap<OutPoint, TxOut>,
     iconfig: &IndexerConfig,
+    op: &Operation,
 ) -> Vec<DBRow> {
     block_entries
         .par_iter() // serialization is CPU-intensive
@@ -1384,6 +1450,7 @@ fn index_blocks(
                     previous_txos_map,
                     &mut rows,
                     iconfig,
+                    op,
                 );
             }
             rows.push(BlockRow::new_done(full_hash(&b.entry.hash()[..])).into_row()); // mark block as "indexed"
@@ -1401,6 +1468,7 @@ fn index_transaction(
     previous_txos_map: &HashMap<OutPoint, TxOut>,
     rows: &mut Vec<DBRow>,
     iconfig: &IndexerConfig,
+    op: &Operation,
 ) {
     // persist history index:
     //      H{funding-scripthash}{spending-height}{spending-block-pos}S{spending-txid:vin}{funding-txid:vout} → ""
@@ -1408,6 +1476,11 @@ fn index_transaction(
     // persist "edges" for fast is-this-TXO-spent check
     //      S{funding-txid:vout}{spending-txid:vin} → ""
     let txid = full_hash(&tx.txid()[..]);
+    let script_callback = |script_hash| {
+        if let Operation::DeleteBlocksWithHistory(tx) = op {
+            tx.send(script_hash).expect("unbounded channel won't fail");
+        }
+    };
     for (txo_index, txo) in tx.output.iter().enumerate() {
         if is_spendable(txo) || iconfig.index_unspendables {
             let history = TxHistoryRow::new(
@@ -1420,6 +1493,7 @@ fn index_transaction(
                     value: txo.value,
                 }),
             );
+            script_callback(history.key.hash);
             rows.push(history.into_row());
 
             if iconfig.address_search {
@@ -1449,6 +1523,7 @@ fn index_transaction(
                 value: prev_txo.value,
             }),
         );
+        script_callback(history.key.hash);
         rows.push(history.into_row());
 
         let edge = TxEdgeRow::new(
@@ -1469,6 +1544,7 @@ fn index_transaction(
         iconfig.network,
         iconfig.parent_network,
         rows,
+        op,
     );
 }
 
