@@ -37,7 +37,7 @@ use crate::new_index::fetch::{start_fetcher, BlockEntry, FetchFrom};
 #[cfg(feature = "liquid")]
 use crate::elements::{asset, peg};
 
-use super::db::ReverseScanGroupIterator;
+use super::{db::ReverseScanGroupIterator, fetch::bitcoind_sequential_fetcher};
 
 const MIN_HISTORY_ITEMS_TO_CACHE: usize = 100;
 
@@ -295,10 +295,10 @@ impl Indexer {
         // if we reorg the whole mainnet chain it should come out to about 145 GB of memory.
         let (tx, rx) = crossbeam_channel::unbounded();
         // Delete txstore
-        start_fetcher(self.from, daemon, reorged.clone())?
+        bitcoind_sequential_fetcher(daemon, reorged.clone())?
             .map(|blocks| self.add(&blocks, Operation::DeleteBlocks));
         // Delete history_db
-        start_fetcher(self.from, daemon, reorged)?
+        bitcoind_sequential_fetcher(daemon, reorged)?
             .map(|blocks| self.index(&blocks, Operation::DeleteBlocksWithHistory(tx.clone())));
         // All senders must be dropped for receiver iterator to finish
         drop(tx);
