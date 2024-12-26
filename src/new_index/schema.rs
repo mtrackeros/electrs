@@ -424,7 +424,11 @@ impl Indexer {
         debug!("Indexing ({}) {} blocks with Indexer", op, blocks.len());
         let previous_txos_map = {
             let _timer = self.start_timer("index_lookup");
-            lookup_txos(&self.store.txstore_db, &get_previous_txos(blocks), false)
+            if matches!(op, Operation::AddBlocks) {
+                lookup_txos(&self.store.txstore_db, &get_previous_txos(blocks), false)
+            } else {
+                lookup_txos_sequential(&self.store.txstore_db, &get_previous_txos(blocks), false)
+            }
         };
         let rows = {
             let _timer = self.start_timer("index_process");
@@ -1433,6 +1437,7 @@ fn lookup_txos(
         }
     };
     pool.install(|| {
+        // Should match lookup_txos_sequential
         outpoints
             .par_iter()
             .filter_map(|outpoint| {
@@ -1447,6 +1452,27 @@ fn lookup_txos(
             })
             .collect()
     })
+}
+
+fn lookup_txos_sequential(
+    txstore_db: &DB,
+    outpoints: &BTreeSet<OutPoint>,
+    allow_missing: bool,
+) -> HashMap<OutPoint, TxOut> {
+    // Should match lookup_txos
+    outpoints
+        .iter()
+        .filter_map(|outpoint| {
+            lookup_txo(txstore_db, outpoint)
+                .or_else(|| {
+                    if !allow_missing {
+                        panic!("missing txo {} in {:?}", outpoint, txstore_db);
+                    }
+                    None
+                })
+                .map(|txo| (*outpoint, txo))
+        })
+        .collect()
 }
 
 fn lookup_txo(txstore_db: &DB, outpoint: &OutPoint) -> Option<TxOut> {
