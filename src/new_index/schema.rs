@@ -294,12 +294,12 @@ impl Indexer {
         // This channel holds a Vec of [u8; 32] scripts found in the blocks (with duplicates)
         // if we reorg the whole mainnet chain it should come out to about 145 GB of memory.
         let (tx, rx) = crossbeam_channel::unbounded();
-        // Delete txstore
-        bitcoind_sequential_fetcher(daemon, reorged.clone())?
-            .map(|blocks| self.add(&blocks, Operation::DeleteBlocks));
         // Delete history_db
-        bitcoind_sequential_fetcher(daemon, reorged)?
+        bitcoind_sequential_fetcher(daemon, reorged.clone())?
             .map(|blocks| self.index(&blocks, Operation::DeleteBlocksWithHistory(tx.clone())));
+        // Delete txstore
+        bitcoind_sequential_fetcher(daemon, reorged)?
+            .map(|blocks| self.add(&blocks, Operation::DeleteBlocks));
         // All senders must be dropped for receiver iterator to finish
         drop(tx);
 
