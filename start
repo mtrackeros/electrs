@@ -169,7 +169,7 @@ do
 		UTXOS_LIMIT=9000
 		ELECTRUM_TXS_LIMIT=9000
 	fi
-	if [ "${NODENAME}" = "node213" ];then
+	if [ "${NODENAME}" = "node214" ];then
 		UTXOS_LIMIT=9000
 		ELECTRUM_TXS_LIMIT=9000
 	fi
