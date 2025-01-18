@@ -148,7 +148,7 @@ pub enum DBFlush {
 impl DB {
     pub fn open(path: &Path, config: &Config) -> DB {
         let db = DB {
-            db: open_raw_db(path),
+            db: open_raw_db(path, OpenMode::ReadWrite),
         };
         db.verify_compatibility(config);
         db
@@ -281,7 +281,17 @@ impl DB {
     }
 }
 
-pub fn open_raw_db<T: rocksdb::ThreadMode>(path: &Path) -> rocksdb::DBWithThreadMode<T> {
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum OpenMode {
+    ReadOnly,
+    ReadWrite,
+}
+
+pub fn open_raw_db<T: rocksdb::ThreadMode>(
+    path: &Path,
+    read_mode: OpenMode,
+) -> rocksdb::DBWithThreadMode<T> {
     debug!("opening DB at {:?}", path);
     let mut db_opts = rocksdb::Options::default();
     db_opts.create_if_missing(true);
@@ -299,5 +309,13 @@ pub fn open_raw_db<T: rocksdb::ThreadMode>(path: &Path) -> rocksdb::DBWithThread
     // let mut block_opts = rocksdb::BlockBasedOptions::default();
     // block_opts.set_block_size(???);
 
-    rocksdb::DBWithThreadMode::<T>::open(&db_opts, path).expect("failed to open RocksDB")
+    match read_mode {
+        OpenMode::ReadOnly => {
+            rocksdb::DBWithThreadMode::<T>::open_for_read_only(&db_opts, path, false)
+                .expect("failed to open RocksDB (READ ONLY)")
+        }
+        OpenMode::ReadWrite => {
+            rocksdb::DBWithThreadMode::<T>::open(&db_opts, path).expect("failed to open RocksDB")
+        }
+    }
 }
