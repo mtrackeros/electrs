@@ -242,6 +242,15 @@ impl DB {
         self.db.write_opt(batch, &opts).unwrap();
     }
 
+    pub fn delete(&self, keys: Vec<Vec<u8>>) {
+        debug!("deleting {} rows from {:?}", keys.len(), self.db);
+        for key in keys {
+            let _ = self.db.delete(key).inspect_err(|err| {
+                warn!("Error while deleting DB row: {err}");
+            });
+        }
+    }
+
     pub fn flush(&self) {
         self.db.flush().unwrap();
     }
