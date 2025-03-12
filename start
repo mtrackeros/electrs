@@ -164,11 +164,32 @@ do
 	RPC_PASS=$(grep 'rpcpassword=' "${DAEMON_CONF}"|cut -d = -f2|head -1)
 
 	# override limits based on hostname
-	if [ "${NODENAME}" = "node201" ];then
+	if [ "${NODENAME}" = "node207" ] && [ "${LOCATION}" = "va1" ];then
 		UTXOS_LIMIT=9000
 		ELECTRUM_TXS_LIMIT=9000
 		MAIN_LOOP_DELAY=14000
 	fi
+	if [ "${NODENAME}" = "node207" ] && [ "${LOCATION}" = "fra" ];then
+		UTXOS_LIMIT=9000
+		ELECTRUM_TXS_LIMIT=9000
+		MAIN_LOOP_DELAY=14000
+	fi
+	if [ "${NODENAME}" = "node203" ] && [ "${LOCATION}" = "tk7" ];then
+		UTXOS_LIMIT=9000
+		ELECTRUM_TXS_LIMIT=9000
+		MAIN_LOOP_DELAY=14000
+	fi
+	if [ "${NODENAME}" = "node203" ] && [ "${LOCATION}" = "sg1" ];then
+		UTXOS_LIMIT=9000
+		ELECTRUM_TXS_LIMIT=9000
+		MAIN_LOOP_DELAY=14000
+	fi
+	if [ "${NODENAME}" = "node203" ] && [ "${LOCATION}" = "hnl" ];then
+		UTXOS_LIMIT=9000
+		ELECTRUM_TXS_LIMIT=9000
+		MAIN_LOOP_DELAY=14000
+	fi
+
 	if [ "${NODENAME}" = "node202" ] && [ "${LOCATION}" = "va1" ];then
 		UTXOS_LIMIT=9000
 		ELECTRUM_TXS_LIMIT=9000
@@ -198,10 +219,6 @@ do
 		ELECTRUM_TXS_LIMIT=9000
 	fi
 	if [ "${NETWORK}" = "testnet4" ];then
-		UTXOS_LIMIT=9000
-		ELECTRUM_TXS_LIMIT=9000
-	fi
-	if [ "${LOCATION}" = "fmt" ];then
 		UTXOS_LIMIT=9000
 		ELECTRUM_TXS_LIMIT=9000
 	fi
